@@ -3,10 +3,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from timm.models.layers import trunc_normal_, to_2tuple
 
-# =================================================================================
-# == Core Building Blocks
-# =================================================================================
-
 class MLP(nn.Module):
     """Multi-Layer Perceptron."""
     def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU):
@@ -178,10 +174,6 @@ class PatchEmbed(nn.Module):
         x = self.proj(x).flatten(2).transpose(1, 2)
         return self.norm(x)
 
-# =================================================================================
-# == Refactored High-Level Modules
-# =================================================================================
-
 class FeatureModulator(nn.Module):
     """Modulates features using a gating mechanism controlled by SNR."""
     def __init__(self, dim, mod_layers=7):
@@ -248,7 +240,7 @@ class DecoderStage(nn.Module):
             x = blk(x)
         return self.upsample(x)
 
-class SwinEncoder(nn.Module):
+class WITTEncoder(nn.Module):
     """Swin Transformer Encoder."""
     def __init__(self, img_size=32, patch_size=2, embed_dims=[64, 128], depths=[2, 2], num_heads=[2, 4], C_out=32,
                  window_size=4, use_modulation=True):
@@ -277,7 +269,7 @@ class SwinEncoder(nn.Module):
             x = self.modulator(x, snr)
         return self.head(x)
 
-class SwinDecoder(nn.Module):
+class WITTDecoder(nn.Module):
     """Swin Transformer Decoder."""
     def __init__(self, img_size=32, patch_size=2, embed_dims=[128, 64], depths=[2, 2], num_heads=[4, 2], C_in=32,
                  window_size=4, use_modulation=True):
@@ -301,18 +293,20 @@ class SwinDecoder(nn.Module):
         x = self.head(x)
         if self.modulator:
             x = self.modulator(x, snr)
-        
         for stage in self.stages:
             x = stage(x)
-            
         return x.view(-1, 3, self.H, self.W)
 
-class SwinTransformer(nn.Module):
-    """Swin Transformer based Autoencoder."""
+class WITTransformer(nn.Module):
+    """
+        Swin Transformer based Wireless Image Transmission Transformer for
+        Semantic Communications.
+        Paper: https://arxiv.org/pdf/2211.00937
+    """
     def __init__(self, encoder_cfg, decoder_cfg):
         super().__init__()
-        self.encoder = SwinEncoder(**encoder_cfg)
-        self.decoder = SwinDecoder(**decoder_cfg)
+        self.encoder = WITTEncoder(**encoder_cfg)
+        self.decoder = WITTDecoder(**decoder_cfg)
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
