@@ -1,14 +1,16 @@
-from typing import Protocol
 import torch.nn as nn
 
-class _Encoder(Protocol):
-    def forward(self, x): ...
+class _Encoder(nn.Module):
+    def forward(self, x):
+        raise NotImplementedError
 
-class _Decoder(Protocol):
-    def forward(self, z): ...
+class _Decoder(nn.Module):
+    def forward(self, z):
+        raise NotImplementedError
 
-class _Channel(Protocol):
-    def forward(self, z): ...
+class _Channel(nn.Module):
+    def forward(self, z):
+        raise NotImplementedError
 
 class Pipeline(nn.Module):
     def __init__(self, encoder: _Encoder, channel: _Channel, decoder: _Decoder):
