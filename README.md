@@ -80,6 +80,9 @@ print("Encoded image shape:", encoded_img.shape)
 print("Channel output shape:", channel_out.shape)
 print("Output image shape:", output_image.shape)
 print("Pipeline output shape:", pipeline_out.shape)
+
+# The output of the individual components is the same as the output of the pipeline
+torch.all(output_image == pipeline_out)  # Should be True
 ```
 
 ### Roadmap:
