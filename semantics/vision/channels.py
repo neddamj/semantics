@@ -91,5 +91,5 @@ class RayleighNoiseChannel(_Channel):
         return h * x + self.noise
     
 class ErrorFreeChannel(_Channel):
-    def send(self, x):
+    def forward(self, x):
         return x
