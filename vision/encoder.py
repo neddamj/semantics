@@ -1,1 +1,1 @@
-from models.witt import WITTEncoder
+from .models.witt import WITTEncoder

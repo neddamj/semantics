@@ -242,60 +242,109 @@ class DecoderStage(nn.Module):
 
 class WITTEncoder(nn.Module):
     """Swin Transformer Encoder."""
-    def __init__(self, img_size=32, patch_size=2, embed_dims=[64, 128], depths=[2, 2], num_heads=[2, 4], C_out=32,
-                 window_size=4, use_modulation=True):
+    def __init__(
+        self,
+        img_size=32,
+        patch_size=2,
+        embed_dims=[64, 128],
+        depths=[2, 2],
+        num_heads=[2, 4],
+        C_out=32,
+        window_size=4,
+        use_modulation=True,
+        snr=10.0,
+        in_chans=3
+    ):
         super().__init__()
-        self.patch_embed = PatchEmbed(img_size, patch_size, in_chans=3, embed_dim=embed_dims[0])
+        self.patch_embed = PatchEmbed(
+            img_size, patch_size, in_chans=in_chans, embed_dim=embed_dims[0]
+        )
         res = self.patch_embed.patches_resolution
+        self.snr = snr
         
         self.stages = nn.ModuleList()
         for i, (dim, out_dim, depth, heads) in enumerate(zip(embed_dims, embed_dims[1:] + [embed_dims[-1]], depths, num_heads)):
-            self.stages.append(EncoderStage(
-                dim=dim, out_dim=out_dim, input_resolution=(res[0] // (2 ** i), res[1] // (2 ** i)),
-                depth=depth, num_heads=heads, window_size=window_size,
-                downsample=(i < len(embed_dims) - 1)))
+            self.stages.append(
+                EncoderStage(
+                    dim=dim,
+                    out_dim=out_dim,
+                    input_resolution=(res[0] // (2 ** i), res[1] // (2 ** i)),
+                    depth=depth,
+                    num_heads=heads,
+                    window_size=window_size,
+                    downsample=(i < len(embed_dims) - 1)
+                )
+            )
 
         final_dim = embed_dims[-1]
         self.norm = nn.LayerNorm(final_dim)
         self.head = nn.Linear(final_dim, C_out)
         self.modulator = FeatureModulator(final_dim) if use_modulation else None
 
-    def forward(self, x, snr):
+    def forward(self, x):
         x = self.patch_embed(x)
         for stage in self.stages:
             x = stage(x)
         x = self.norm(x)
         if self.modulator:
-            x = self.modulator(x, snr)
+            x = self.modulator(x, self.snr)
         return self.head(x)
 
 class WITTDecoder(nn.Module):
     """Swin Transformer Decoder."""
-    def __init__(self, img_size=32, patch_size=2, embed_dims=[128, 64], depths=[2, 2], num_heads=[4, 2], C_in=32,
-                 window_size=4, use_modulation=True):
+    def __init__(
+        self,
+        img_size=32,
+        patch_size=2,
+        embed_dims=[128, 64],
+        depths=[2, 2],
+        num_heads=[4, 2],
+        C_in=32,
+        window_size=4,
+        use_modulation=True,
+        snr=10.0,
+        out_chans=3
+    ):
         super().__init__()
         self.num_layers = len(depths)
         self.H, self.W = img_size, img_size
-        self.res = (img_size // (patch_size * (2 ** (len(depths)-1))), img_size // (patch_size * (2 ** (len(depths)-1))))
+        # tokens resolution at decoder input
+        self.res = (
+            img_size // (patch_size * (2 ** (len(depths) - 1))),
+            img_size // (patch_size * (2 ** (len(depths) - 1))),
+        )
+        self.snr = snr
+        self.out_chans = out_chans  # <--- store it
 
         initial_dim = embed_dims[0]
         self.head = nn.Linear(C_in, initial_dim)
         self.modulator = FeatureModulator(initial_dim) if use_modulation else None
 
         self.stages = nn.ModuleList()
-        for i, (dim, out_dim, depth, heads) in enumerate(zip(embed_dims, embed_dims[1:] + [3], depths, num_heads)):
-            self.stages.append(DecoderStage(
-                dim=dim, out_dim=out_dim, input_resolution=(self.res[0] * (2 ** i), self.res[1] * (2 ** i)),
-                depth=depth, num_heads=heads, window_size=window_size,
-                upsample=True))
+        # IMPORTANT: last stage should output 'out_chans' (NOT hard-coded 3)
+        for i, (dim, out_dim, depth, heads) in enumerate(
+            zip(embed_dims, embed_dims[1:] + [out_chans], depths, num_heads)  # <--- here
+        ):
+            self.stages.append(
+                DecoderStage(
+                    dim=dim,
+                    out_dim=out_dim,
+                    input_resolution=(self.res[0] * (2 ** i), self.res[1] * (2 ** i)),
+                    depth=depth,
+                    num_heads=heads,
+                    window_size=window_size,
+                    upsample=True,
+                )
+            )
 
-    def forward(self, x, snr):
+    def forward(self, x):
         x = self.head(x)
         if self.modulator:
-            x = self.modulator(x, snr)
+            x = self.modulator(x, self.snr)
         for stage in self.stages:
             x = stage(x)
-        return x.view(-1, 3, self.H, self.W)
+        # Use out_chans and reshape (safer than view for non-contiguous tensors)
+        return x.reshape(-1, self.out_chans, self.H, self.W)
 
 class WITTransformer(nn.Module):
     """
