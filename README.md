@@ -1,6 +1,6 @@
 # Semantic Communication in PyTorch
 
-This repository provides tools that can be used to implement semantic communication workflows in PyTorch.
+#### This repository provides tools that can be used to implement semantic communication workflows in PyTorch.
 
 Example Usage
 ```python
@@ -81,3 +81,9 @@ print("Channel output shape:", channel_out.shape)
 print("Output image shape:", output_image.shape)
 print("Pipeline output shape:", pipeline_out.shape)
 ```
+
+### Roadmap:
+- [ ] Ability to train semantic communication models
+- [ ] Train models and store their weights somewhere
+- [ ] Have the ability to download pretrained models
+- [ ] Make into python package for easy usage
