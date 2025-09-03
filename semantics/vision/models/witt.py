@@ -3,6 +3,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 from timm.models.layers import trunc_normal_, to_2tuple
 
+"""
+    WITT: A Wireless Image Transmission Transformer for Semantic Communications.
+    Paper: https://arxiv.org/pdf/2211.00937
+"""
+
 class MLP(nn.Module):
     """Multi-Layer Perceptron."""
     def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU):
@@ -347,11 +352,7 @@ class WITTDecoder(nn.Module):
         return x.reshape(-1, self.out_chans, self.H, self.W)
 
 class WITTransformer(nn.Module):
-    """
-        Swin Transformer based Wireless Image Transmission Transformer for
-        Semantic Communications.
-        Paper: https://arxiv.org/pdf/2211.00937
-    """
+    """WIT Transformer: Combines WITT Encoder and Decoder."""
     def __init__(self, encoder_cfg, decoder_cfg):
         super().__init__()
         self.encoder = WITTEncoder(**encoder_cfg)
