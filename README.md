@@ -87,3 +87,4 @@ print("Pipeline output shape:", pipeline_out.shape)
 - [ ] Train models and store their weights somewhere
 - [ ] Have the ability to download pretrained models
 - [ ] Make into python package for easy usage
+- [ ] Implement more model architectures
