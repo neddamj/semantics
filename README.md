@@ -4,11 +4,8 @@
 
 Example Usage
 ```python
-from semantics.vision.encoder import WITTEncoder
-from semantics.vision.decoder import WITTDecoder
-from semantics.vision.models.witt import WITTransformer
-from semantics.vision.channels import RayleighNoiseChannel, GaussianNoiseChannel, ErrorFreeChannel
 from semantics.pipeline import Pipeline
+import semantics.vision as sv
 
 import torch
 
@@ -59,9 +56,9 @@ channel_config = {
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-encoder = WITTEncoder(**encoder_cfg).to(device)
-decoder = WITTDecoder(**decoder_cfg).to(device)
-channel = ErrorFreeChannel(**channel_config).to(device)
+encoder = sv.encoder.WITTEncoder(**encoder_cfg).to(device)
+decoder = sv.decoder.WITTDecoder(**decoder_cfg).to(device)
+channel = sv.channels.ErrorFreeChannel(**channel_config).to(device)
 pipeline = Pipeline(encoder, channel, decoder).to(device)
 
 # Semantic Communication Example
