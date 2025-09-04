@@ -349,7 +349,7 @@ class WITTDecoder(nn.Module):
         for stage in self.stages:
             x = stage(x)
         # Use out_chans and reshape (safer than view for non-contiguous tensors)
-        return x.reshape(-1, self.out_chans, self.H, self.W)
+        return x.reshape(-1, self.out_chans, self.H, self.W).sigmoid()
 
 class WITTransformer(nn.Module):
     """WIT Transformer: Combines WITT Encoder and Decoder."""
@@ -368,7 +368,7 @@ class WITTransformer(nn.Module):
             nn.init.constant_(m.bias, 0)
             nn.init.constant_(m.weight, 1.0)
             
-    def forward(self, x, snr):
-        latent = self.encoder(x, snr)
-        recon = self.decoder(latent, snr)
+    def forward(self, x):
+        latent = self.encoder(x)
+        recon = self.decoder(latent)
         return recon
