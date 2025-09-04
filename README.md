@@ -10,7 +10,7 @@ import semantics.vision as sv
 import torch
 
 # Configuration parameters
-batch_size = 4
+batch_size = 128
 dim = 64
 img_size = 32
 patch_size = 2
@@ -23,42 +23,39 @@ channel_std = 0.1
 channel_snr = None
 channel_avg_power = None
 
-encoder_cfg = {
-    'img_size': img_size, 
-    'patch_size': patch_size, 
-    'embed_dims': [64, 128],
-    'depths': [2, 2],
-    'num_heads': [4, 8], 
-    'C_out': 32, 
-    'window_size': 4, 
-    'use_modulation': modulation,
-    'in_chans': num_channels
-}
-
-decoder_cfg = {
-    'img_size': img_size, 
-    'patch_size': patch_size, 
-    'embed_dims': [128, 64],
-    'depths': [2, 2], 
-    'num_heads': [8, 4], 
-    'C_in': 32, 
-    'window_size': 4, 
-    'use_modulation': modulation,
-    'out_chans': num_channels
-}
-
-channel_config = {
-    'mean': channel_mean,
-    'std': channel_std,
-    'snr': channel_snr,
-    'avg_power': channel_avg_power
-}
-
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-encoder = sv.encoder.WITTEncoder(**encoder_cfg).to(device)
-decoder = sv.decoder.WITTDecoder(**decoder_cfg).to(device)
-channel = sv.channels.ErrorFreeChannel(**channel_config).to(device)
+encoder = sv.encoder.WITTEncoder(
+    img_size = img_size, 
+    patch_size = patch_size, 
+    embed_dims = [32, 64, 128, 256],
+    depths = [2, 2, 2, 2],
+    num_heads = [4, 8, 8, 8], 
+    C_out = 32, 
+    window_size = 4, 
+    use_modulation = modulation,
+    in_chans = num_channels
+).to(device)
+
+decoder = sv.decoder.WITTDecoder(
+    img_size = img_size, 
+    patch_size = patch_size, 
+    embed_dims = [256, 128, 64, 32],
+    depths = [2, 2, 2, 2], 
+    num_heads = [8, 8, 8, 4], 
+    C_in = 32, 
+    window_size = 4, 
+    use_modulation = modulation,
+    out_chans = num_channels
+).to(device)
+
+channel = sv.channels.GaussianNoiseChannel(
+    mean = channel_mean,
+    std = channel_std,
+    snr = channel_snr,
+    avg_power = channel_avg_power
+).to(device)
+
 pipeline = Pipeline(encoder, channel, decoder).to(device)
 
 # Semantic Communication Example
@@ -80,6 +77,104 @@ print("Pipeline output shape:", pipeline_out.shape)
 
 # The output of the individual components is the same as the output of the pipeline
 torch.all(output_image == pipeline_out)  # Should be True
+```
+### Training Semantic Communication Models
+
+Training models can be accomplished easily via the Trainer workflow. An example of training on the CIFAR-10 dataset can be seen below
+
+```python
+import torch
+from torch.optim import Adam
+from torch.utils.data import DataLoader
+from torchvision import datasets, transforms
+
+from semantics.pipeline import Pipeline
+from semantics.train import Trainer, TrainerConfig
+import semantics.vision as sv
+
+# Build pipeline
+batch_size = 128
+dim = 64
+img_size = 32
+patch_size = 2
+window_size = 4
+num_heads = 4
+modulation = True
+num_channels = 3
+channel_mean = 0.0
+channel_std = 0.1
+channel_snr = None
+channel_avg_power = None
+
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+encoder = sv.encoder.WITTEncoder(
+    img_size = img_size, 
+    patch_size = patch_size, 
+    embed_dims = [32, 64, 128, 256],
+    depths = [2, 2, 2, 2],
+    num_heads = [4, 8, 8, 8], 
+    C_out = 32, 
+    window_size = 4, 
+    use_modulation = modulation,
+    in_chans = num_channels
+).to(device)
+
+decoder = sv.decoder.WITTDecoder(
+    img_size = img_size, 
+    patch_size = patch_size, 
+    embed_dims = [256, 128, 64, 32],
+    depths = [2, 2, 2, 2], 
+    num_heads = [8, 8, 8, 4], 
+    C_in = 32, 
+    window_size = 4, 
+    use_modulation = modulation,
+    out_chans = num_channels
+).to(device)
+
+channel = sv.channels.GaussianNoiseChannel(
+    mean = channel_mean,
+    std = channel_std,
+    snr = channel_snr,
+    avg_power = channel_avg_power
+).to(device)
+
+pipeline = Pipeline(encoder, channel, decoder).to(device)
+
+# Data
+transform = transforms.Compose([transforms.Resize((img_size, img_size)), transforms.ToTensor()])
+train_ds = datasets.CIFAR10("./data", train=True,  download=True, transform=transform)
+val_ds   = datasets.CIFAR10("./data", train=False, download=True, transform=transform)
+train_loader = DataLoader(train_ds, batch_size=128, shuffle=True,  num_workers=4, pin_memory=True)
+val_loader   = DataLoader(val_ds,   batch_size=256, shuffle=False, num_workers=4, pin_memory=True)
+
+# Optimizer
+optimizer = Adam(pipeline.parameters(), lr=3e-4)
+
+# Simple metrics
+def psnr(y_hat, y, data_range=1.0):
+    mse = torch.mean((y_hat - y) ** 2).clamp_min(1e-12)
+    return float(10.0 * torch.log10((data_range ** 2) / mse))
+
+metrics = {"psnr": psnr}
+
+# Train
+cfg = TrainerConfig(
+        num_epochs=25,
+        learning_rate=3e-4,
+        ckpt_path="checkpoints/best.pt", 
+        log_every=100
+    )
+trainer = Trainer(
+        pipeline, 
+        optimizer, 
+        train_loader, 
+        val_loader, 
+        loss_fn=torch.nn.L1Loss(), 
+        metrics=metrics, 
+        config=cfg
+    )
+trainer.train()
 ```
 
 ### Roadmap:
