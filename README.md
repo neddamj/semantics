@@ -83,7 +83,7 @@ torch.all(output_image == pipeline_out)  # Should be True
 ```
 
 ### Roadmap:
-- [ ] Ability to train semantic communication models
+- [x] Ability to train semantic communication models
 - [ ] Train models and store their weights somewhere
 - [ ] Have the ability to download pretrained models
 - [ ] Make into python package for easy usage
