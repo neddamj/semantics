@@ -1,8 +1,15 @@
 # Semantic Communication in PyTorch
 
-#### This repository provides tools that can be used to implement semantic communication workflows in PyTorch.
+This repository provides utilities that can be used to implement semantic communication workflows in PyTorch.
 
-Example Usage
+## Getting Started
+
+``` bash
+pip install semantics-pytorch
+```
+
+### Example Usage
+
 ```python
 from semantics.pipeline import Pipeline
 import semantics.vision as sv
@@ -78,6 +85,7 @@ print("Pipeline output shape:", pipeline_out.shape)
 # The output of the individual components is the same as the output of the pipeline
 torch.all(output_image == pipeline_out)  # Should be True
 ```
+
 ### Training Semantic Communication Models
 
 Training models can be accomplished easily via the Trainer workflow. An example of training on the CIFAR-10 dataset can be seen below
@@ -180,7 +188,8 @@ trainer = Trainer(
 trainer.train()
 ```
 
-### Roadmap:
+### Roadmap
+
 - [x] Ability to train semantic communication models
 - [x] Add metrics to the package
 - [ ] Train models and store their weights somewhere
