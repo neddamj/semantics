@@ -132,7 +132,7 @@ decoder = sv.decoder.WITTDecoder(
     out_chans = num_channels
 ).to(device)
 
-channel = sv.channels.GaussianNoiseChannel(
+channel = sv.channels.AWGNChannel(
     mean = channel_mean,
     std = channel_std,
     snr = channel_snr,
@@ -145,40 +145,44 @@ pipeline = Pipeline(encoder, channel, decoder).to(device)
 transform = transforms.Compose([transforms.Resize((img_size, img_size)), transforms.ToTensor()])
 train_ds = datasets.CIFAR10("./data", train=True,  download=True, transform=transform)
 val_ds   = datasets.CIFAR10("./data", train=False, download=True, transform=transform)
-train_loader = DataLoader(train_ds, batch_size=128, shuffle=True,  num_workers=4, pin_memory=True)
-val_loader   = DataLoader(val_ds,   batch_size=256, shuffle=False, num_workers=4, pin_memory=True)
+train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,  num_workers=4, pin_memory=True)
+val_loader   = DataLoader(val_ds,   batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
 
-# Optimizer
+# Optimizer and Loss
 optimizer = Adam(pipeline.parameters(), lr=3e-4)
+criterion = torch.nn.L1Loss()
 
 # Simple metrics
-def psnr(y_hat, y, data_range=1.0):
-    mse = torch.mean((y_hat - y) ** 2).clamp_min(1e-12)
-    return float(10.0 * torch.log10((data_range ** 2) / mse))
-
-metrics = {"psnr": psnr}
+metrics = {
+        "psnr": sv.metrics.PSNRMetric(),
+        'ssim': sv.metrics.SSIMMetric(data_range=1.0, size_average=True,channel=3)
+    }
 
 # Train
 cfg = TrainerConfig(
-        num_epochs=25,
-        learning_rate=3e-4,
-        ckpt_path="checkpoints/best.pt", 
-        log_every=100
-    )
+    num_epochs=20,
+    learning_rate=3e-4,
+    use_amp=True,          # turn on mixed precision
+    amp_dtype="auto",      # auto-select bf16/fp16
+    grad_accum_steps=1,    # increase if batches are small
+    clip_grad_norm=1.0,    # optional safety
+    compile_model=False,   # set True if PyTorch 2.x and stable graph
+)
 trainer = Trainer(
-        pipeline, 
-        optimizer, 
-        train_loader, 
-        val_loader, 
-        loss_fn=torch.nn.L1Loss(), 
-        metrics=metrics, 
-        config=cfg
-    )
+    pipeline=pipeline,
+    optimizer=optimizer,
+    train_loader=train_loader,
+    val_loader=val_loader,
+    loss_fn=criterion,
+    config=cfg,
+    metrics=metrics,
+)
 trainer.train()
 ```
 
 ### Roadmap:
 - [x] Ability to train semantic communication models
+- [x] Add metrics to the package
 - [ ] Train models and store their weights somewhere
 - [ ] Have the ability to download pretrained models
 - [ ] Make into python package for easy usage
