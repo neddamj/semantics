@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from timm.models.layers import trunc_normal_, to_2tuple
+from timm.layers import trunc_normal_, to_2tuple
 
 """
     WITT: A Wireless Image Transmission Transformer for Semantic Communications.

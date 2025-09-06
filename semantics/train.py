@@ -59,7 +59,7 @@ class Trainer:
         self.amp_enabled = bool(self.cfg.use_amp) and (self.device_type in ("cuda", "cpu"))
         # GradScaler is enabled only for fp16 + CUDA - bf16/CPU doesn’t use scaler
         use_scaler = self.amp_enabled and self.device_type == "cuda" and self.autocast_dtype == torch.float16
-        self.scaler = torch.cuda.amp.GradScaler(enabled=use_scaler)
+        self.scaler = torch.amp.GradScaler(enabled=use_scaler)
 
     def _resolve_amp_dtype(self, amp_dtype_str):
         if not self.cfg.use_amp:
