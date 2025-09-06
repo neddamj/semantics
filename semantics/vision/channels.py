@@ -81,7 +81,7 @@ class _Channel(nn.Module):
     def send(self, x):
         raise NotImplementedError
     
-class GaussianNoiseChannel(_Channel):
+class AWGNChannel(_Channel):
     def send(self, x):
         return x + self.noise 
 

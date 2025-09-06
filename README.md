@@ -49,7 +49,7 @@ decoder = sv.decoder.WITTDecoder(
     out_chans = num_channels
 ).to(device)
 
-channel = sv.channels.GaussianNoiseChannel(
+channel = sv.channels.AWGNChannel(
     mean = channel_mean,
     std = channel_std,
     snr = channel_snr,
