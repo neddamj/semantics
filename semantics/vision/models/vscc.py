@@ -140,13 +140,14 @@ class VSCCEncoder(nn.Module):
 
         h = self.pre_head_act(self.pre_head_norm(x))
         stats = self.stats_head(h)  # (B, 2k, H', W')
+        mu, logvar = stats.chunk(2, dim=1)
 
         if self.reparameterize:
             # Reparameterize before sending through the channel
             z = _reparameterize(stats)
-            return z
+            return z, mu, logvar
         else:
-            return stats
+            return stats, mu, logvar
 
 
 class VSCCDecoder(nn.Module):
@@ -202,7 +203,7 @@ class VSCCDecoder(nn.Module):
         x = self.block32b(x)
         x = self.out_conv(self.tail_act(self.tail_norm(x)))
         x = self.out_tanh(x)
-        return x
+        return x, z, stats
 
 
 class Normalize(nn.Module):

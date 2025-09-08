@@ -131,7 +131,11 @@ class Trainer:
             x = x.to(self.cfg.device, non_blocking=True)
 
             with self._autocast_ctx():
-                x_hat = self.pipeline(x)
+                # Handle the pipeline's outputs dynamically
+                outputs = self.pipeline(x)
+                x_hat = outputs[0]  # Primary output
+                aux = outputs[1] if len(outputs) > 1 else {}  # Auxiliary outputs
+
                 loss = self.loss_fn(x_hat, x) / accum  # scale for grad accumulation
 
             if self.scaler.is_enabled():
@@ -183,7 +187,11 @@ class Trainer:
                 x = batch[0] if isinstance(batch, (list, tuple)) else batch
                 x = x.to(self.cfg.device, non_blocking=True)
 
-                y_hat = self.pipeline(x)
+                # Handle the pipeline's outputs dynamically
+                outputs = self.pipeline(x)
+                y_hat = outputs[0]  # Primary output
+                aux = outputs[1] if len(outputs) > 1 else {}  # Auxiliary outputs
+
                 loss = self.loss_fn(y_hat, x)
 
                 total += float(loss.item())
