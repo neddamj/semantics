@@ -100,13 +100,10 @@ from semantics.pipeline import Pipeline
 from semantics.train import Trainer, TrainerConfig
 import semantics.vision as sv
 
-# Build pipeline
+# Configuration parameters
 batch_size = 128
-dim = 64
+dim = 128
 img_size = 32
-patch_size = 2
-window_size = 4
-num_heads = 4
 modulation = True
 num_channels = 3
 channel_mean = 0.0
@@ -114,39 +111,30 @@ channel_std = 0.1
 channel_snr = None
 channel_avg_power = None
 
+encoder_cfg = {
+    'in_ch': num_channels,
+    'k': dim,
+    'reparameterize': False
+}
+
+decoder_cfg = {
+    'out_ch': num_channels,
+    'k': dim,
+    'reparameterize': True
+}
+
+channel_config = {
+    'mean': channel_mean,
+    'std': channel_std,
+    'snr': channel_snr,
+    'avg_power': channel_avg_power
+}
+
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-encoder = sv.encoder.WITTEncoder(
-    img_size = img_size, 
-    patch_size = patch_size, 
-    embed_dims = [32, 64, 128, 256],
-    depths = [2, 2, 2, 2],
-    num_heads = [4, 8, 8, 8], 
-    C_out = 32, 
-    window_size = 4, 
-    use_modulation = modulation,
-    in_chans = num_channels
-).to(device)
-
-decoder = sv.decoder.WITTDecoder(
-    img_size = img_size, 
-    patch_size = patch_size, 
-    embed_dims = [256, 128, 64, 32],
-    depths = [2, 2, 2, 2], 
-    num_heads = [8, 8, 8, 4], 
-    C_in = 32, 
-    window_size = 4, 
-    use_modulation = modulation,
-    out_chans = num_channels
-).to(device)
-
-channel = sv.channels.AWGNChannel(
-    mean = channel_mean,
-    std = channel_std,
-    snr = channel_snr,
-    avg_power = channel_avg_power
-).to(device)
-
+encoder = sv.VSCCEncoder(**encoder_cfg).to(device)
+decoder = sv.VSCCDecoder(**decoder_cfg).to(device)
+channel = sv.AWGNChannel(**channel_config).to(device)
 pipeline = Pipeline(encoder, channel, decoder).to(device)
 
 # Data
@@ -162,8 +150,8 @@ criterion = torch.nn.L1Loss()
 
 # Simple metrics
 metrics = {
-        "psnr": sv.metrics.PSNRMetric(),
-        'ssim': sv.metrics.SSIMMetric(data_range=1.0, size_average=True,channel=3)
+        "psnr": sv.PSNRMetric(),
+        'ssim': sv.SSIMMetric(data_range=1.0, size_average=True, channel=3)
     }
 
 # Train
@@ -188,11 +176,13 @@ trainer = Trainer(
 trainer.train()
 ```
 
+More examples for inference and training of semantic communication models can be found in the example folder
+
 ### Roadmap
 
 - [x] Ability to train semantic communication models
 - [x] Add metrics to the package
+- [x] Make into python package for easy usage
+- [x] Implement more model architectures
 - [ ] Train models and store their weights somewhere
 - [ ] Have the ability to download pretrained models
-- [ ] Make into python package for easy usage
-- [ ] Implement more model architectures
