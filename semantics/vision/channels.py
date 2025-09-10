@@ -87,7 +87,9 @@ class AWGNChannel(_Channel):
 
 class RayleighNoiseChannel(_Channel):
     def send(self, x):
-        h = self._make_complex_noise(x.shape, x.device, x.dtype, mean=0.0, std=1.0 / math.sqrt(2.0))
+        h = self._make_complex_noise(x.shape, x.device, x.dtype, mean=0.0, std=1.0)# / math.sqrt(2.0))
+        h = h.real ** 2 + h.imag ** 2
+        h = torch.sqrt(h).clamp_min(1e-12) / math.sqrt(2.0)
         return h * x + self.noise
     
 class ErrorFreeChannel(_Channel):
