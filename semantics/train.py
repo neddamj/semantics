@@ -8,7 +8,6 @@ from contextlib import nullcontext
 @dataclass
 class TrainerConfig:
     num_epochs: int = 10
-    learning_rate: float = 1e-3
     device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
     ckpt_path: str = './checkpoints/best.pt'
     log_every: int = 100
