@@ -32,7 +32,7 @@ channel_avg_power = None
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-encoder = sv.encoder.WITTEncoder(
+encoder = sv.WITTEncoder(
     img_size = img_size, 
     patch_size = patch_size, 
     embed_dims = [32, 64, 128, 256],
@@ -44,7 +44,7 @@ encoder = sv.encoder.WITTEncoder(
     in_chans = num_channels
 ).to(device)
 
-decoder = sv.decoder.WITTDecoder(
+decoder = sv.WITTDecoder(
     img_size = img_size, 
     patch_size = patch_size, 
     embed_dims = [256, 128, 64, 32],
@@ -56,7 +56,7 @@ decoder = sv.decoder.WITTDecoder(
     out_chans = num_channels
 ).to(device)
 
-channel = sv.channels.AWGNChannel(
+channel = sv.AWGNChannel(
     mean = channel_mean,
     std = channel_std,
     snr = channel_snr,
@@ -157,7 +157,6 @@ metrics = {
 # Train
 cfg = TrainerConfig(
     num_epochs=20,
-    learning_rate=3e-4,
     use_amp=True,          # turn on mixed precision
     amp_dtype="auto",      # auto-select bf16/fp16
     grad_accum_steps=1,    # increase if batches are small
