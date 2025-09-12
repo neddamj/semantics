@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='semantics-pytorch',
-    version='0.2.0',
+    version='0.3.0',
     author='Jordan Madden',
     description='Utilities for implementing semantic communication workflows in PyTorch',
     packages=find_packages(),
