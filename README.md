@@ -1,92 +1,38 @@
 # Semantic Communication in PyTorch
 
-This repository provides utilities that can be used to implement semantic communication workflows in PyTorch.
+This repository provides a modular PyTorch toolkit for building, training and evaluating semantic communication systems end-to-end.
 
-## Getting Started
+## Installation
 
+To get started, install this on PyPI:
 ``` bash
 pip install semantics-pytorch
 ```
 
-### Example Usage
+## Quickstart
 
 ```python
+import torch
 from semantics.pipeline import Pipeline
 import semantics.vision as sv
 
-import torch
+# Define encoder/decoder
+encoder = sv.WITTEncoder(img_size=32, patch_size=2, embed_dims=[32,64,128,256], depths=[2,2,2,2], num_heads=[4,8,8,16])
+decoder = sv.WITTDecoder(img_size=32, patch_size=2, embed_dims=[256,128,64,32], depths=[2,2,2,2], num_heads=[16,8,8,4])
 
-# Configuration parameters
-batch_size = 128
-dim = 64
-img_size = 32
-patch_size = 2
-window_size = 4
-num_heads = 4
-modulation = True
-num_channels = 3
-channel_mean = 0.0
-channel_std = 0.1
-channel_snr = None
-channel_avg_power = None
+# Define channel
+channel = sv.AWGNChannel(mean=0.0, std=0.1)
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+# Build pipeline
+pipe = Pipeline(encoder, channel, decoder)
 
-encoder = sv.WITTEncoder(
-    img_size = img_size, 
-    patch_size = patch_size, 
-    embed_dims = [32, 64, 128, 256],
-    depths = [2, 2, 2, 2],
-    num_heads = [4, 8, 8, 8], 
-    C_out = 32, 
-    window_size = 4, 
-    use_modulation = modulation,
-    in_chans = num_channels
-).to(device)
-
-decoder = sv.WITTDecoder(
-    img_size = img_size, 
-    patch_size = patch_size, 
-    embed_dims = [256, 128, 64, 32],
-    depths = [2, 2, 2, 2], 
-    num_heads = [8, 8, 8, 4], 
-    C_in = 32, 
-    window_size = 4, 
-    use_modulation = modulation,
-    out_chans = num_channels
-).to(device)
-
-channel = sv.AWGNChannel(
-    mean = channel_mean,
-    std = channel_std,
-    snr = channel_snr,
-    avg_power = channel_avg_power
-).to(device)
-
-pipeline = Pipeline(encoder, channel, decoder).to(device)
-
-# Semantic Communication Example
-input_image = torch.randn(batch_size, num_channels, img_size, img_size).to(device)
-with torch.no_grad():
-    # Run image through the entire pipeline step-by-step
-    encoded_img = encoder(input_image)
-    channel_out = channel(encoded_img)
-    output_image = decoder(channel_out)
-
-    # Run image through the entire pipeline at once
-    pipeline_out = pipeline(input_image)
-
-print("Input image shape:", input_image.shape)
-print("Encoded image shape:", encoded_img.shape)
-print("Channel output shape:", channel_out.shape)
-print("Output image shape:", output_image.shape)
-print("Pipeline output shape:", pipeline_out.shape)
-
-# The output of the individual components is the same as the output of the pipeline
-torch.all(output_image == pipeline_out)  # Should be True
+# Run a forward pass
+x = torch.randn(8, 3, 32, 32)  # dummy batch
+out, _ = pipe(x)
+print(out.shape)
 ```
 
-### Training Semantic Communication Models
+## Training Semantic Communication Models
 
 Training models can be accomplished easily via the Trainer workflow. An example of training on the CIFAR-10 dataset can be seen below
 
@@ -175,7 +121,8 @@ trainer = Trainer(
 trainer.train()
 ```
 
-More examples for inference and training of semantic communication models can be found in the example folder
+## More Examples
+For additional usage examples—including how to set up datasets, train pipelines, and run inference—see the `examples/` folder. These scripts provide workflows you can adapt to your own research or experiments.
 
 ### Roadmap
 
@@ -183,5 +130,6 @@ More examples for inference and training of semantic communication models can be
 - [x] Add metrics to the package
 - [x] Make into python package for easy usage
 - [x] Implement more model architectures
+- [x] Ability to train and run 'semantic' classifiers
 - [ ] Train models and store their weights somewhere
 - [ ] Have the ability to download pretrained models
