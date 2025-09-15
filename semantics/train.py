@@ -34,8 +34,11 @@ class Trainer:
         self.cfg = config
         self.pipeline = pipeline.to(self.cfg.device)
         if self.cfg.compile_model and hasattr(torch, "compile"):
-            self.pipeline.encoder = torch.compile(self.pipeline.encoder)
-            self.pipeline.decoder = torch.compile(self.pipeline.decoder)
+            if hasattr(self.pipeline, "encoder") and hasattr(self.pipeline, "decoder"):
+                self.pipeline.encoder = torch.compile(self.pipeline.encoder)
+                self.pipeline.decoder = torch.compile(self.pipeline.decoder)
+            else:
+                self.pipeline = torch.compile(self.pipeline)
 
         self.optimizer = optimizer
         self.loss_fn = loss_fn
