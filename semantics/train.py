@@ -17,6 +17,7 @@ class TrainerConfig:
     grad_accum_steps: int = 1             # accumulate N steps before optimizer.step()
     clip_grad_norm: float = 0.0           # 0 disables
     compile_model: bool = False           # torch.compile for speed (PyTorch 2+)
+    task: str = "reconstruction"          # "reconstruction" | "supervised"
 
 class Trainer:
     def __init__(
@@ -32,6 +33,8 @@ class Trainer:
             lr_scheduler = None
     ):
         self.cfg = config
+        if not isinstance(self.cfg.task, str) or self.cfg.task not in ("reconstruction", "supervised"):
+            raise ValueError("TrainerConfig.task must be set to 'reconstruction' or 'supervised'")
         self.pipeline = pipeline.to(self.cfg.device)
         if self.cfg.compile_model and hasattr(torch, "compile"):
             if hasattr(self.pipeline, "encoder") and hasattr(self.pipeline, "decoder"):
@@ -83,6 +86,15 @@ class Trainer:
             return torch.autocast(device_type=self.device_type, dtype=self.autocast_dtype)
         return nullcontext()
 
+    def _split_batch(self, batch):
+        if self.cfg.task == "reconstruction":
+            x = batch[0] if isinstance(batch, (list, tuple)) else batch
+            target = x
+            return x, target
+        if not (isinstance(batch, (list, tuple)) and len(batch) >= 2):
+            raise ValueError("Supervised task requires batches of (inputs, targets)")
+        return batch[0], batch[1]
+
     def train(self):
         for epoch in range(self.cfg.num_epochs):
             self.epoch = epoch
@@ -130,16 +142,20 @@ class Trainer:
 
         progress = tqdm(self.train_loader, desc=f"Epoch {self.epoch+1}/{self.cfg.num_epochs}", leave=False)
         for i, batch in enumerate(progress):
-            x = batch[0] if isinstance(batch, (list, tuple)) else batch
+            x, target = self._split_batch(batch)
             x = x.to(self.cfg.device, non_blocking=True)
+            if isinstance(target, torch.Tensor):
+                target = target.to(self.cfg.device, non_blocking=True)
 
             with self._autocast_ctx():
-                # Handle the pipeline's outputs dynamically
                 outputs = self.pipeline(x)
-                x_hat = outputs[0]  # Primary output
-                aux = outputs[1] if len(outputs) > 1 else {}  # Auxiliary outputs
-
-                loss = self.loss_fn(x_hat, x) / accum  # scale for grad accumulation
+                if isinstance(outputs, (list, tuple)):
+                    x_hat = outputs[0]
+                    aux = outputs[1] if len(outputs) > 1 else {}
+                else:
+                    x_hat = outputs
+                    aux = {}
+                loss = self.loss_fn(x_hat, target) / accum
 
             if self.scaler.is_enabled():
                 self.scaler.scale(loss).backward()
@@ -148,15 +164,12 @@ class Trainer:
 
             step_boundary = ((i + 1) % accum == 0)
             if step_boundary:
-                # If using scaler, unscale before clipping
                 if self.scaler.is_enabled():
                     self.scaler.unscale_(self.optimizer)
 
-                # Grad clipping
                 if self.cfg.clip_grad_norm and self.cfg.clip_grad_norm > 0.0:
                     nn.utils.clip_grad_norm_(self.pipeline.parameters(), self.cfg.clip_grad_norm)
 
-                # Optimizer step (scaled or not)
                 if self.scaler.is_enabled():
                     self.scaler.step(self.optimizer)
                     self.scaler.update()
@@ -165,7 +178,7 @@ class Trainer:
 
                 self.optimizer.zero_grad(set_to_none=True)
 
-            running += float(loss.item()) * accum  # undo the division for reporting
+            running += float(loss.item()) * accum
             n += 1
             self.global_step += 1
 
@@ -187,24 +200,28 @@ class Trainer:
         # Use autocast in eval too for speed (safe with no_grad)
         with self._autocast_ctx():
             for batch in progress:
-                x = batch[0] if isinstance(batch, (list, tuple)) else batch
+                x, target = self._split_batch(batch)
                 x = x.to(self.cfg.device, non_blocking=True)
+                if isinstance(target, torch.Tensor):
+                    target = target.to(self.cfg.device, non_blocking=True)
 
-                # Handle the pipeline's outputs dynamically
                 outputs = self.pipeline(x)
-                y_hat = outputs[0]  # Primary output
-                aux = outputs[1] if len(outputs) > 1 else {}  # Auxiliary outputs
+                if isinstance(outputs, (list, tuple)):
+                    y_hat = outputs[0]
+                    aux = outputs[1] if len(outputs) > 1 else {}
+                else:
+                    y_hat = outputs
+                    aux = {}
 
-                loss = self.loss_fn(y_hat, x)
+                loss = self.loss_fn(y_hat, target)
 
                 total += float(loss.item())
                 n += 1
 
-                # metrics computed in float32 for stability
                 y_hat_f = y_hat.float()
-                x_f = x.float()
+                target_f = target.float() if isinstance(target, torch.Tensor) and target.is_floating_point() else target
                 for name, fn in self.metrics.items():
-                    metric_sums[name] += float(fn(y_hat_f, x_f))
+                    metric_sums[name] += float(fn(y_hat_f, target_f))
 
                 avg_loss = total / n
                 progress.set_postfix({"val_loss": f"{avg_loss:.4f}"})
@@ -231,7 +248,6 @@ class Trainer:
         self.pipeline.load_state_dict(ckpt["pipeline"])
         self.optimizer.load_state_dict(ckpt["optimizer"])
         if "scaler" in ckpt and ckpt["scaler"] is not None and hasattr(self.scaler, "load_state_dict"):
-            # Load scaler only if it was enabled (safe even if disabled; it’s a no-op)
             self.scaler.load_state_dict(ckpt["scaler"])
         self.epoch = ckpt.get("epoch", 0)
         self.global_step = ckpt.get("global_step", 0)
