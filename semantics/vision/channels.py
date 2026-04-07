@@ -61,7 +61,13 @@ class _Channel(nn.Module):
         else:
             sigma = self.std
 
-        self.noise = self._make_complex_noise(x_tx.shape, x_tx.device, x_tx.dtype, mean=0.0, std=sigma)
+        self.noise = self._make_complex_noise(
+            x_tx.shape,
+            x_tx.device,
+            x_tx.dtype,
+            mean=float(self.mean),
+            std=sigma
+        )
 
         # Pass through channel and restore original power
         y_c = self.send(x_tx)
