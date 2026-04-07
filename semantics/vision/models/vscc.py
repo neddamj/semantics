@@ -239,23 +239,38 @@ class VSCC(nn.Module):
         self.decoder = VSCCDecoder(out_ch=img_channels, k=latent_k)
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, dict]:
-        # Normalization (as in the figure)
+        # Normalize image
         x_n = self.normalize(x)
 
-        # Encode -> stats = concat(mu, logvar)
-        stats, mu, logvar = self.encoder(x_n)
+        # Encoder returns a primary tensor plus distribution params.
+        # If encoder.reparameterize=True, primary is z; otherwise primary is stats=[mu|logvar].
+        enc_primary, mu, logvar = self.encoder(x_n)
+        stats = torch.cat([mu, logvar], dim=1)
+        z_tx = enc_primary if self.encoder.reparameterize else None
 
-        # Reparameterize
-        z = self.encoder._reparameterize(mu, logvar)
+        # Decoder contract:
+        #   - reparameterize=True  -> expects stats
+        #   - reparameterize=False -> expects latent z
+        decoder_input = stats if self.decoder.reparameterize else enc_primary
+        decoder_output = self.decoder(decoder_input)
 
-        # Decode + Denormalize
-        y_n = self.decoder(z)
+        if isinstance(decoder_output, tuple):
+            y_n = decoder_output[0]
+            z_rx = decoder_output[1] if len(decoder_output) > 1 else None
+            stats_rx = decoder_output[2] if len(decoder_output) > 2 else None
+        else:
+            y_n = decoder_output
+            z_rx = None
+            stats_rx = None
+
         y = self.denormalize(y_n)
 
         aux = {
-            "z": z,
             "mu": mu,
             "logvar": logvar,
-            "stats": stats
+            "stats": stats,
+            "z_tx": z_tx,
+            "z_rx": z_rx,
+            "stats_rx": stats_rx,
         }
         return y, aux

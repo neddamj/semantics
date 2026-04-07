@@ -338,6 +338,23 @@ class Trainer:
                     amp_state = "off"
                 progress.set_postfix({"loss": f"{avg_loss:.4f}", "amp": amp_state})
 
+        # Flush any trailing micro-batches that did not hit an accumulation boundary.
+        # Without this step, the final partial accumulation window would never update weights.
+        if steps > 0 and (steps % accum) != 0:
+            if self.scaler.is_enabled():
+                self.scaler.unscale_(self.optimizer)
+
+            if self.cfg.clip_grad_norm and self.cfg.clip_grad_norm > 0.0:
+                nn.utils.clip_grad_norm_(self._unwrap_model().parameters(), self.cfg.clip_grad_norm)
+
+            if self.scaler.is_enabled():
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+            else:
+                self.optimizer.step()
+
+            self.optimizer.zero_grad(set_to_none=True)
+
         return running / max(steps, 1)
 
     @torch.no_grad()
