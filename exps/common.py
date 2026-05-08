@@ -770,3 +770,177 @@ def save_summary_plots(rows: Sequence[dict], output_dir: Path) -> list[Path]:
             saved_paths.append(output_path)
 
     return saved_paths
+
+
+def save_channel_adversary_plots(rows: Sequence[dict], output_dir: Path) -> list[Path]:
+    os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    def condition_order(channel: Optional[str], snr_db: Optional[float]) -> tuple[int, float]:
+        if channel == "error_free":
+            return (0, 0.0)
+        if channel == "awgn":
+            return (1, -float(snr_db if snr_db is not None else -1e9))
+        if channel == "rayleigh":
+            return (2, -float(snr_db if snr_db is not None else -1e9))
+        return (3, 0.0)
+
+    def mode_label(raw_mode: str) -> str:
+        return "EoT-PGD" if raw_mode == "eot_pgd" else raw_mode.upper()
+
+    plots_dir = output_dir / "plots"
+    ensure_dir(plots_dir)
+    saved_paths: list[Path] = []
+
+    matched_rows = [
+        row
+        for row in rows
+        if row.get("attack_location") in ("input", "latent")
+        and row.get("adversary_mode") in ("pgd", "eot_pgd")
+        and row.get("attack_condition") == row.get("eval_condition")
+        and row.get("attack_channel") == row.get("eval_channel")
+        and row.get("attack_snr_db") == row.get("eval_snr_db")
+        and row.get("eval_channel") in ("awgn", "rayleigh")
+        and row.get("eval_snr_db") is not None
+        and row.get("attack_success_rate") is not None
+    ]
+
+    matched_groups = {}
+    for row in matched_rows:
+        key = (
+            row["model"],
+            row["train_channel"],
+            row["attack_location"],
+            row["eval_channel"],
+        )
+        matched_groups.setdefault(key, []).append(row)
+
+    for (model_name, train_channel, attack_location, eval_channel), group_rows in matched_groups.items():
+        figure, axis = plt.subplots(figsize=(7, 4))
+        plotted = False
+        for adversary_mode in ("pgd", "eot_pgd"):
+            mode_rows = [
+                row for row in group_rows
+                if row.get("adversary_mode") == adversary_mode
+            ]
+            mode_rows.sort(key=lambda item: float(item["eval_snr_db"]), reverse=True)
+            x_values = [float(row["eval_snr_db"]) for row in mode_rows]
+            y_values = [float(row["attack_success_rate"]) for row in mode_rows]
+            if not x_values:
+                continue
+            axis.plot(x_values, y_values, marker="o", label=mode_label(adversary_mode))
+            plotted = True
+
+        if not plotted:
+            plt.close(figure)
+            continue
+
+        axis.set_title(
+            f"{model_name} trained on {train_channel}, {attack_location} attack, eval {eval_channel}"
+        )
+        axis.set_xlabel("Matched Eval SNR (dB)")
+        axis.set_ylabel("Attack Success Rate")
+        axis.set_ylim(0.0, 1.0)
+        axis.grid(True, alpha=0.3)
+        axis.invert_xaxis()
+        axis.legend()
+        output_path = (
+            plots_dir
+            / f"attack_success_rate_compare_{model_name}_train_{train_channel}_{attack_location}_{eval_channel}.png"
+        )
+        figure.tight_layout()
+        figure.savefig(output_path)
+        plt.close(figure)
+        saved_paths.append(output_path)
+
+    heatmap_rows = [
+        row
+        for row in rows
+        if row.get("attack_location") in ("input", "latent")
+        and row.get("adversary_mode") in ("pgd", "eot_pgd")
+        and row.get("attack_condition") is not None
+        and row.get("eval_condition") is not None
+        and row.get("attack_success_rate") is not None
+    ]
+
+    heatmap_groups = {}
+    for row in heatmap_rows:
+        key = (
+            row["model"],
+            row["train_channel"],
+            row["attack_location"],
+            row["adversary_mode"],
+        )
+        heatmap_groups.setdefault(key, []).append(row)
+
+    for (model_name, train_channel, attack_location, adversary_mode), group_rows in heatmap_groups.items():
+        attack_condition_rows = {}
+        eval_condition_rows = {}
+        for row in group_rows:
+            attack_key = (
+                row["attack_condition"],
+                row.get("attack_channel"),
+                row.get("attack_snr_db"),
+            )
+            eval_key = (
+                row["eval_condition"],
+                row.get("eval_channel"),
+                row.get("eval_snr_db"),
+            )
+            attack_condition_rows[attack_key] = row
+            eval_condition_rows[eval_key] = row
+
+        attack_keys = sorted(
+            attack_condition_rows.keys(),
+            key=lambda item: condition_order(item[1], item[2]),
+        )
+        eval_keys = sorted(
+            eval_condition_rows.keys(),
+            key=lambda item: condition_order(item[1], item[2]),
+        )
+        if not attack_keys or not eval_keys:
+            continue
+
+        attack_index = {key: idx for idx, key in enumerate(attack_keys)}
+        eval_index = {key: idx for idx, key in enumerate(eval_keys)}
+        matrix = np.full((len(attack_keys), len(eval_keys)), np.nan, dtype=float)
+
+        for row in group_rows:
+            attack_key = (
+                row["attack_condition"],
+                row.get("attack_channel"),
+                row.get("attack_snr_db"),
+            )
+            eval_key = (
+                row["eval_condition"],
+                row.get("eval_channel"),
+                row.get("eval_snr_db"),
+            )
+            matrix[attack_index[attack_key], eval_index[eval_key]] = float(row["attack_success_rate"])
+
+        figure_width = max(7.0, 0.8 * len(eval_keys))
+        figure_height = max(4.5, 0.6 * len(attack_keys))
+        figure, axis = plt.subplots(figsize=(figure_width, figure_height))
+        image = axis.imshow(matrix, aspect="auto", vmin=0.0, vmax=1.0, cmap="viridis")
+        axis.set_title(
+            f"{model_name} trained on {train_channel}, {attack_location}, {mode_label(adversary_mode)}"
+        )
+        axis.set_xlabel("Evaluation condition")
+        axis.set_ylabel("Attack condition")
+        axis.set_xticks(range(len(eval_keys)))
+        axis.set_xticklabels([key[0] for key in eval_keys], rotation=45, ha="right")
+        axis.set_yticks(range(len(attack_keys)))
+        axis.set_yticklabels([key[0] for key in attack_keys])
+        colorbar = figure.colorbar(image, ax=axis)
+        colorbar.set_label("Attack Success Rate")
+        output_path = (
+            plots_dir
+            / f"transfer_heatmap_{model_name}_train_{train_channel}_{attack_location}_{adversary_mode}.png"
+        )
+        figure.tight_layout()
+        figure.savefig(output_path)
+        plt.close(figure)
+        saved_paths.append(output_path)
+
+    return saved_paths
