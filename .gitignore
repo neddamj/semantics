@@ -1,4 +1,6 @@
 __pycache__/
 data/
 checkpoints/
-experiments/
+outputs/
+!exps/
+!exps/*.py
