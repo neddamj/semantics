@@ -41,7 +41,22 @@ def set_torch_seed(seed: int, device: torch.device) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
+def _sanitize_tensor(
+    x: torch.Tensor,
+    *,
+    nan: float = 0.0,
+    posinf: float = 0.0,
+    neginf: float = 0.0,
+) -> torch.Tensor:
+    return torch.nan_to_num(x, nan=nan, posinf=posinf, neginf=neginf)
+
+
+def _sanitize_reconstruction(x: torch.Tensor) -> torch.Tensor:
+    return _sanitize_tensor(x, nan=0.0, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
+
+
 def mean_power_per_sample(x: torch.Tensor) -> torch.Tensor:
+    x = _sanitize_tensor(x)
     flat = x.reshape(x.size(0), -1)
     return flat.pow(2).mean(dim=1)
 
@@ -66,6 +81,7 @@ def project_to_spr_ball(
 
 
 def perturbation_step(gradient: torch.Tensor, step_sizes: torch.Tensor) -> torch.Tensor:
+    gradient = _sanitize_tensor(gradient)
     grad_flat = gradient.reshape(gradient.size(0), -1)
     grad_norm = grad_flat.norm(p=2, dim=1).clamp_min(1e-12)
     normalized = gradient / grad_norm.view(-1, *([1] * (gradient.ndim - 1)))
@@ -117,7 +133,7 @@ def eot_attack_loss(
             x=adv_inputs,
             latent=adv_latent,
         )
-        recon = recon.clamp(0.0, 1.0)
+        recon = _sanitize_reconstruction(recon)
         logits = classifier(classifier_normalizer(recon))
         losses.append(F.cross_entropy(logits, target_labels))
     return torch.stack(losses, dim=0).mean()
@@ -150,7 +166,7 @@ def evaluate_variant(
             x=adv_inputs,
             latent=adv_latent,
         )
-        recon = recon.clamp(0.0, 1.0)
+        recon = _sanitize_reconstruction(recon)
         logits = classifier(classifier_normalizer(recon))
         mse_values, psnr_values, ssim_values = metric_suite.measure(recon, target_images)
 
@@ -212,7 +228,7 @@ def pgd_input_attack(
             perturbation = effective_delta + perturbation_step(gradient, step_sizes)
             adv_inputs = (signal + perturbation).clamp(0.0, 1.0)
             perturbation = adv_inputs - signal
-            perturbation = project_to_spr_ball(perturbation, signal, spr_db)
+            perturbation = _sanitize_tensor(project_to_spr_ball(perturbation, signal, spr_db))
 
     final_adv = (signal + perturbation).clamp(0.0, 1.0).detach()
     final_delta = final_adv - signal
@@ -264,12 +280,12 @@ def pgd_latent_attack(
         gradient = torch.autograd.grad(loss, perturbation)[0]
         with torch.no_grad():
             perturbation = perturbation + perturbation_step(gradient, step_sizes)
-            perturbation = project_to_spr_ball(perturbation, signal, spr_db)
+            perturbation = _sanitize_tensor(project_to_spr_ball(perturbation, signal, spr_db))
 
-    final_adv_latent = (signal + perturbation).detach()
+    final_adv_latent = _sanitize_tensor(signal + perturbation).detach()
     return AttackArtifact(
         adv_inputs=None,
         adv_latent=final_adv_latent,
-        perturbation=perturbation.detach(),
-        signal=signal.detach(),
+        perturbation=_sanitize_tensor(perturbation).detach(),
+        signal=_sanitize_tensor(signal).detach(),
     )

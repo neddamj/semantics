@@ -772,6 +772,111 @@ def save_summary_plots(rows: Sequence[dict], output_dir: Path) -> list[Path]:
     return saved_paths
 
 
+def save_attack_budget_sweep_plots(rows: Sequence[dict], output_dir: Path) -> list[Path]:
+    os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
+    import matplotlib.pyplot as plt
+
+    plots_dir = output_dir / "plots"
+    ensure_dir(plots_dir)
+    saved_paths: list[Path] = []
+
+    filtered = [
+        row
+        for row in rows
+        if row.get("eval_channel") in ("awgn", "rayleigh")
+        and row.get("eval_snr_db") is not None
+        and (
+            row.get("attack_location") == "clean"
+            or (
+                row.get("attack_condition") == row.get("eval_condition")
+                and row.get("attack_channel") == row.get("eval_channel")
+                and row.get("attack_snr_db") == row.get("eval_snr_db")
+            )
+        )
+    ]
+    if not filtered:
+        return saved_paths
+
+    groups = {}
+    for row in filtered:
+        key = (
+            row["model"],
+            row["train_channel"],
+            row["eval_channel"],
+            row["eval_snr_db"],
+        )
+        groups.setdefault(key, []).append(row)
+
+    for (model_name, train_channel, eval_channel, eval_snr_db), group_rows in groups.items():
+        figure, (acc_axis, success_axis) = plt.subplots(1, 2, figsize=(12, 4), sharex=True)
+        clean_rows = [
+            row
+            for row in group_rows
+            if row.get("attack_location") == "clean"
+        ]
+        clean_accuracy = float(clean_rows[0]["classifier_acc"]) if clean_rows else None
+        condition_label = clean_rows[0].get("eval_condition") if clean_rows else None
+        if not condition_label:
+            condition_label = f"{eval_channel.upper()} @ {float(eval_snr_db):g} dB"
+
+        plotted = False
+        for attack_location in ("input", "latent"):
+            attack_rows = [
+                row for row in group_rows
+                if row.get("attack_location") == attack_location and row.get("spr_db") is not None
+            ]
+            attack_rows.sort(key=lambda item: float(item["spr_db"]), reverse=True)
+            x_values = [float(row["spr_db"]) for row in attack_rows]
+            acc_values = [float(row["classifier_acc"]) for row in attack_rows]
+            success_values = [float(row["attack_success_rate"]) for row in attack_rows]
+            if not x_values:
+                continue
+            acc_axis.plot(x_values, acc_values, marker="o", label=attack_location)
+            success_axis.plot(x_values, success_values, marker="o", label=attack_location)
+            plotted = True
+
+        if not plotted:
+            plt.close(figure)
+            continue
+
+        if clean_accuracy is not None:
+            acc_axis.axhline(
+                clean_accuracy,
+                color="black",
+                linestyle="--",
+                linewidth=1.0,
+                label="clean baseline",
+            )
+
+        for axis in (acc_axis, success_axis):
+            axis.set_xlabel("SPR (dB, lower = stronger attack)")
+            axis.grid(True, alpha=0.3)
+            axis.invert_xaxis()
+            axis.legend()
+
+        acc_axis.set_title("Classifier Accuracy")
+        acc_axis.set_ylabel("Accuracy")
+        acc_axis.set_ylim(0.0, 1.0)
+        success_axis.set_title("Attack Success Rate")
+        success_axis.set_ylabel("Success Rate")
+        success_axis.set_ylim(0.0, 1.0)
+        figure.suptitle(f"{model_name} trained on {train_channel}, {condition_label}")
+
+        output_path = (
+            plots_dir
+            / (
+                f"attack_budget_sweep_{model_name}_train_{train_channel}_"
+                f"eval_{eval_channel}_snr_{snr_slug(float(eval_snr_db))}db.png"
+            )
+        )
+        figure.tight_layout()
+        figure.savefig(output_path)
+        plt.close(figure)
+        saved_paths.append(output_path)
+
+    return saved_paths
+
+
 def save_channel_adversary_plots(rows: Sequence[dict], output_dir: Path) -> list[Path]:
     os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
     import matplotlib.pyplot as plt

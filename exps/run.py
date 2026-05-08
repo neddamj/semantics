@@ -51,6 +51,7 @@ from exps.common import (
     resolve_semantic_checkpoint_path,
     save_sample_grid,
     save_channel_adversary_plots,
+    save_attack_budget_sweep_plots,
     save_summary_plots,
     semantic_training_defaults,
     set_seed,
@@ -61,7 +62,10 @@ from semantics.train import Trainer, TrainerConfig
 
 
 DEFAULT_CHANNEL_ADVERSARY_OUTPUT_ROOT = "outputs/channel_adversary_comparison"
+DEFAULT_ATTACK_BUDGET_OUTPUT_ROOT = "outputs/attack_budget_sweep"
 DEFAULT_CHANNEL_ADVERSARY_CLASSIFIER_CHECKPOINT = "checkpoints/cifar10_resnet18_classifier_strong.pt"
+DEFAULT_ATTACK_BUDGET_CLASSIFIER_CHECKPOINT = "checkpoints/cifar10_resnet18_classifier_strong.pt"
+DEFAULT_ATTACK_BUDGET_SPR_DB = [30.0, 25.0, 20.0, 15.0, 12.0, 10.0, 8.0, 6.0, 4.0, 2.0, 0.0, -2.0, -5.0]
 CHANNEL_ADVERSARY_ATTACK_LOCATIONS = ("input", "latent")
 CHANNEL_ADVERSARY_MODES = ("pgd", "eot_pgd")
 
@@ -267,6 +271,64 @@ def parse_args() -> argparse.Namespace:
     run_robustness.add_argument("--swin-bottleneck", type=int, default=16)
     run_robustness.add_argument("--no-random-start", action="store_true")
 
+    run_attack_budget_sweep = subparsers.add_parser(
+        "run-attack-budget-sweep",
+        help="Sweep attack budgets for input and latent PGD under matched noisy channel conditions.",
+    )
+    run_attack_budget_sweep.add_argument(
+        "--models",
+        nargs="+",
+        default=["all"],
+        choices=["all", *MODEL_CHOICES],
+    )
+    run_attack_budget_sweep.add_argument(
+        "--train-channels",
+        nargs="+",
+        default=list(TRAIN_CHANNEL_CHOICES),
+        choices=list(TRAIN_CHANNEL_CHOICES),
+    )
+    run_attack_budget_sweep.add_argument("--train-snr-db", type=float, default=DEFAULT_TRAIN_SNR_DB)
+    run_attack_budget_sweep.add_argument("--checkpoint-dir", default=DEFAULT_CHECKPOINT_DIR)
+    run_attack_budget_sweep.add_argument(
+        "--classifier-checkpoint",
+        default=DEFAULT_ATTACK_BUDGET_CLASSIFIER_CHECKPOINT,
+    )
+    run_attack_budget_sweep.add_argument(
+        "--classifier-arch",
+        default=None,
+        choices=sorted(CLASSIFIER_ARCHES),
+    )
+    run_attack_budget_sweep.add_argument("--data-root", default=DEFAULT_DATA_ROOT)
+    run_attack_budget_sweep.add_argument("--batch-size", type=int, default=32)
+    run_attack_budget_sweep.add_argument("--num-images", type=int, default=1024)
+    run_attack_budget_sweep.add_argument("--full-val", action="store_true")
+    run_attack_budget_sweep.add_argument("--device", default=None)
+    run_attack_budget_sweep.add_argument("--num-workers", type=int, default=0)
+    run_attack_budget_sweep.add_argument("--download", action="store_true")
+    run_attack_budget_sweep.add_argument(
+        "--output-dir",
+        default=DEFAULT_ATTACK_BUDGET_OUTPUT_ROOT,
+    )
+    run_attack_budget_sweep.add_argument(
+        "--eval-snr-db",
+        nargs="+",
+        type=float,
+        default=DEFAULT_EVAL_SNR_DB,
+    )
+    run_attack_budget_sweep.add_argument(
+        "--spr-db",
+        nargs="+",
+        type=float,
+        default=DEFAULT_ATTACK_BUDGET_SPR_DB,
+    )
+    run_attack_budget_sweep.add_argument("--pgd-steps", type=int, default=10)
+    run_attack_budget_sweep.add_argument("--pgd-step-scale", type=float, default=1.5)
+    run_attack_budget_sweep.add_argument("--eot-samples", type=int, default=4)
+    run_attack_budget_sweep.add_argument("--seed", type=int, default=42)
+    run_attack_budget_sweep.add_argument("--smoke", action="store_true")
+    run_attack_budget_sweep.add_argument("--swin-bottleneck", type=int, default=16)
+    run_attack_budget_sweep.add_argument("--no-random-start", action="store_true")
+
     run_channel_adversary_comparison = subparsers.add_parser(
         "run-channel-adversary-comparison",
         help="Compare fixed-channel PGD against channel-aware EoT-PGD across attack and eval conditions.",
@@ -362,17 +424,22 @@ def expand_models(selected_models: list[str]) -> list[str]:
 def apply_smoke_settings(args: argparse.Namespace) -> None:
     args.full_val = False
     args.num_images = min(args.num_images, 32)
-    args.sample_count = min(args.sample_count, 4)
     args.batch_size = min(args.batch_size, 8)
     args.pgd_steps = min(args.pgd_steps, 2)
+    if hasattr(args, "sample_count"):
+        args.sample_count = min(args.sample_count, 4)
     if hasattr(args, "eot_samples"):
         args.eot_samples = min(args.eot_samples, 2)
     if hasattr(args, "attack_eot_samples"):
         args.attack_eot_samples = min(args.attack_eot_samples, 2)
     if hasattr(args, "eval_eot_samples"):
         args.eval_eot_samples = min(args.eval_eot_samples, 2)
+    if hasattr(args, "spr_db") and isinstance(args.spr_db, list):
+        args.spr_db = [20.0, 10.0, 0.0]
     if args.output_dir == DEFAULT_OUTPUT_ROOT:
         args.output_dir = "outputs/robustness_smoke"
+    elif args.output_dir == DEFAULT_ATTACK_BUDGET_OUTPUT_ROOT:
+        args.output_dir = "outputs/attack_budget_sweep_smoke"
     elif args.output_dir == DEFAULT_CHANNEL_ADVERSARY_OUTPUT_ROOT:
         args.output_dir = "outputs/channel_adversary_comparison_smoke"
 
@@ -1177,6 +1244,179 @@ def evaluate_condition(
     return [accumulators[location].finalize() for location in ATTACK_LOCATIONS]
 
 
+def evaluate_attack_budget_sweep_condition(
+    *,
+    pipeline,
+    classifier,
+    classifier_normalizer,
+    metric_suite,
+    loader,
+    device: torch.device,
+    model_name: str,
+    train_channel: str,
+    semantic_checkpoint_path: Path,
+    classifier_checkpoint_path: Path,
+    condition,
+    args: argparse.Namespace,
+) -> list[dict]:
+    pipeline.channel = instantiate_channel(condition.kind, condition.snr_db, device)
+    pipeline.eval()
+
+    accumulators: dict[tuple[str, Optional[float]], RowAccumulator] = {
+        ("clean", None): RowAccumulator(
+            model_name=model_name,
+            train_channel=train_channel,
+            condition_name=condition.name,
+            eval_channel=condition.kind,
+            snr_db=condition.snr_db,
+            attack_location="clean",
+            requested_spr_db=None,
+            semantic_checkpoint=str(semantic_checkpoint_path),
+            classifier_checkpoint=str(classifier_checkpoint_path),
+            extra_fields={
+                "eval_condition": condition.name,
+                "eval_snr_db": condition.snr_db,
+                "attack_condition": None,
+                "attack_channel": None,
+                "attack_snr_db": None,
+            },
+        ),
+    }
+    for spr_db in args.spr_db:
+        for attack_location in ("input", "latent"):
+            accumulators[(attack_location, spr_db)] = RowAccumulator(
+                model_name=model_name,
+                train_channel=train_channel,
+                condition_name=condition.name,
+                eval_channel=condition.kind,
+                snr_db=condition.snr_db,
+                attack_location=attack_location,
+                requested_spr_db=spr_db,
+                semantic_checkpoint=str(semantic_checkpoint_path),
+                classifier_checkpoint=str(classifier_checkpoint_path),
+                extra_fields={
+                    "eval_condition": condition.name,
+                    "eval_snr_db": condition.snr_db,
+                    "attack_condition": condition.name,
+                    "attack_channel": condition.kind,
+                    "attack_snr_db": condition.snr_db,
+                },
+            )
+
+    for batch_index, (images, labels) in enumerate(loader):
+        images = images.to(device, non_blocking=device.type == "cuda")
+        labels = labels.to(device, non_blocking=device.type == "cuda")
+        labels_cpu = labels.detach().cpu()
+        seeds = eot_seed_list(
+            base_seed=args.seed,
+            model_name=model_name,
+            train_channel=train_channel,
+            condition_slug=condition.slug,
+            batch_index=batch_index,
+            eot_samples=args.eot_samples,
+            noisy=condition.kind != "error_free",
+        )
+
+        clean_eval = evaluate_variant(
+            pipeline=pipeline,
+            classifier=classifier,
+            classifier_normalizer=classifier_normalizer,
+            metric_suite=metric_suite,
+            target_images=images,
+            seeds=seeds,
+            device=device,
+            adv_inputs=images,
+        )
+        clean_predictions = clean_eval.mean_logits.argmax(dim=1)
+        clean_correct_mask = clean_predictions.eq(labels_cpu)
+        accumulators[("clean", None)].update(clean_eval, labels_cpu)
+
+        for spr_db in args.spr_db:
+            input_attack = pgd_input_attack(
+                pipeline=pipeline,
+                classifier=classifier,
+                classifier_normalizer=classifier_normalizer,
+                inputs=images,
+                target_labels=labels,
+                seeds=seeds,
+                spr_db=spr_db,
+                steps=args.pgd_steps,
+                step_scale=args.pgd_step_scale,
+                device=device,
+                random_start=not args.no_random_start,
+            )
+            input_eval = evaluate_variant(
+                pipeline=pipeline,
+                classifier=classifier,
+                classifier_normalizer=classifier_normalizer,
+                metric_suite=metric_suite,
+                target_images=images,
+                seeds=seeds,
+                device=device,
+                adv_inputs=input_attack.adv_inputs,
+            )
+            input_predictions = input_eval.mean_logits.argmax(dim=1)
+            input_success_mask = clean_correct_mask & input_predictions.ne(labels_cpu)
+            signal_power, perturbation_power, achieved_spr = measure_signal_and_perturbation(
+                input_attack.signal,
+                input_attack.perturbation,
+            )
+            accumulators[("input", spr_db)].update(
+                input_eval,
+                labels_cpu,
+                clean_correct_mask=clean_correct_mask,
+                attack_success_mask=input_success_mask,
+                signal_power=signal_power.detach().cpu(),
+                perturbation_power=perturbation_power.detach().cpu(),
+                achieved_spr_db=achieved_spr.detach().cpu(),
+            )
+
+            latent_attack = pgd_latent_attack(
+                pipeline=pipeline,
+                classifier=classifier,
+                classifier_normalizer=classifier_normalizer,
+                inputs=images,
+                target_labels=labels,
+                seeds=seeds,
+                spr_db=spr_db,
+                steps=args.pgd_steps,
+                step_scale=args.pgd_step_scale,
+                device=device,
+                random_start=not args.no_random_start,
+            )
+            latent_eval = evaluate_variant(
+                pipeline=pipeline,
+                classifier=classifier,
+                classifier_normalizer=classifier_normalizer,
+                metric_suite=metric_suite,
+                target_images=images,
+                seeds=seeds,
+                device=device,
+                adv_latent=latent_attack.adv_latent,
+            )
+            latent_predictions = latent_eval.mean_logits.argmax(dim=1)
+            latent_success_mask = clean_correct_mask & latent_predictions.ne(labels_cpu)
+            signal_power, perturbation_power, achieved_spr = measure_signal_and_perturbation(
+                latent_attack.signal,
+                latent_attack.perturbation,
+            )
+            accumulators[("latent", spr_db)].update(
+                latent_eval,
+                labels_cpu,
+                clean_correct_mask=clean_correct_mask,
+                attack_success_mask=latent_success_mask,
+                signal_power=signal_power.detach().cpu(),
+                perturbation_power=perturbation_power.detach().cpu(),
+                achieved_spr_db=achieved_spr.detach().cpu(),
+            )
+
+    rows = [accumulators[("clean", None)].finalize()]
+    for spr_db in args.spr_db:
+        rows.append(accumulators[("input", spr_db)].finalize())
+        rows.append(accumulators[("latent", spr_db)].finalize())
+    return rows
+
+
 def run_robustness_command(args: argparse.Namespace) -> None:
     if args.smoke:
         apply_smoke_settings(args)
@@ -1273,6 +1513,105 @@ def run_robustness_command(args: argparse.Namespace) -> None:
     plot_paths = save_summary_plots(all_results, output_dir)
     if plot_paths:
         print("Saved summary plots:")
+        for plot_path in plot_paths:
+            print(f"  {plot_path}")
+
+
+def run_attack_budget_sweep_command(args: argparse.Namespace) -> None:
+    if args.smoke:
+        apply_smoke_settings(args)
+
+    device = resolve_device(args.device)
+    set_seed(args.seed)
+
+    output_dir = resolve_path(args.output_dir)
+    ensure_dir(output_dir)
+    print(f"Using device: {device}")
+    print(f"Writing outputs to: {output_dir}")
+
+    eval_dataset = build_eval_dataset(
+        data_root=args.data_root,
+        num_images=args.num_images,
+        full_val=args.full_val,
+        download=args.download,
+    )
+    eval_loader = make_dataloader(
+        eval_dataset,
+        batch_size=args.batch_size,
+        device=device,
+        shuffle=False,
+        num_workers=args.num_workers,
+    )
+
+    classifier_checkpoint = resolve_path(args.classifier_checkpoint)
+    classifier, classifier_arch = load_classifier_for_eval(
+        checkpoint_path=classifier_checkpoint,
+        device=device,
+        classifier_arch_override=args.classifier_arch,
+    )
+    classifier_normalizer = CIFAR10Normalizer().to(device)
+    metric_suite = ReconstructionMetricSuite(device)
+
+    print(f"Loaded classifier checkpoint: {classifier_checkpoint}")
+    print(f"Classifier architecture: {classifier_arch}")
+    print(f"Evaluating {len(eval_dataset)} CIFAR-10 validation images")
+
+    all_results = []
+    conditions = noisy_channel_conditions(args.eval_snr_db)
+
+    for model_name in expand_models(args.models):
+        for train_channel in args.train_channels:
+            semantic_checkpoint = resolve_semantic_checkpoint_path(
+                model_name=model_name,
+                train_channel=train_channel,
+                train_snr_db=args.train_snr_db,
+                checkpoint_dir=args.checkpoint_dir,
+                swin_bottleneck=args.swin_bottleneck,
+            )
+            print()
+            print(f"Loading semantic checkpoint: {semantic_checkpoint}")
+            pipeline = build_semantic_pipeline(
+                model_name=model_name,
+                device=device,
+                train_channel=train_channel,
+                train_snr_db=args.train_snr_db,
+                swin_bottleneck=args.swin_bottleneck,
+            )
+            load_checkpoint_state(pipeline, semantic_checkpoint, device=device, state_key="pipeline")
+            pipeline.eval()
+
+            for condition in conditions:
+                print(f"[{model_name} | trained on {train_channel}] {condition.name}")
+                condition_rows = evaluate_attack_budget_sweep_condition(
+                    pipeline=pipeline,
+                    classifier=classifier,
+                    classifier_normalizer=classifier_normalizer,
+                    metric_suite=metric_suite,
+                    loader=eval_loader,
+                    device=device,
+                    model_name=model_name,
+                    train_channel=train_channel,
+                    semantic_checkpoint_path=semantic_checkpoint,
+                    classifier_checkpoint_path=classifier_checkpoint,
+                    condition=condition,
+                    args=args,
+                )
+                all_results.extend(condition_rows)
+
+            del pipeline
+            if device.type == "cuda":
+                torch.cuda.empty_cache()
+
+    csv_path = output_dir / "results.csv"
+    write_csv(all_results, csv_path)
+    print()
+    print_results_table(all_results)
+    print()
+    print(f"Saved results CSV to {csv_path}")
+
+    plot_paths = save_attack_budget_sweep_plots(all_results, output_dir)
+    if plot_paths:
+        print("Saved attack-budget sweep plots:")
         for plot_path in plot_paths:
             print(f"  {plot_path}")
 
@@ -1392,6 +1731,9 @@ def main() -> None:
         return
     if args.command == "run-robustness":
         run_robustness_command(args)
+        return
+    if args.command == "run-attack-budget-sweep":
+        run_attack_budget_sweep_command(args)
         return
     if args.command == "run-channel-adversary-comparison":
         run_channel_adversary_comparison_command(args)
